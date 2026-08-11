@@ -43,6 +43,7 @@ public sealed class ChatHistoryLogger
             Text = message.Text,
             PublishedAt = message.PublishedAt,
             Deleted = message.Deleted,
+            EventType = message.EventType,
             RawJson = message.RawJson
         };
 

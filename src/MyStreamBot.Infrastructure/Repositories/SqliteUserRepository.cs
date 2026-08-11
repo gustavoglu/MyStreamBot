@@ -57,13 +57,14 @@ public sealed class SqliteUserRepository(
         return user;
     }
 
-    public async Task<MessageRewardResult> TryRewardMessageAsync(
+    public async Task<RewardResult> TryRewardAsync(
         StreamerUser user,
-        string normalizedMessage,
-        string sourceMessageKey,
+        string? normalizedMessage,
+        string sourceEventKey,
         long amount,
         PointTransactionType type,
         string? description,
+        bool enforceRepeatedMessageCheck,
         CancellationToken ct = default)
     {
         if (amount <= 0)
@@ -74,11 +75,11 @@ public sealed class SqliteUserRepository(
                 "A quantidade de pontos deve ser maior que zero.");
         }
 
-        if (string.IsNullOrWhiteSpace(sourceMessageKey))
+        if (string.IsNullOrWhiteSpace(sourceEventKey))
         {
             throw new ArgumentException(
                 "A chave da mensagem não pode ser vazia.",
-                nameof(sourceMessageKey));
+                nameof(sourceEventKey));
         }
 
         await using var transaction =
@@ -89,33 +90,43 @@ public sealed class SqliteUserRepository(
         var alreadyProcessed =
             await db.PointTransactions
                 .AnyAsync(
-                    x => x.SourceMessageKey == sourceMessageKey,
+                    x => x.SourceMessageKey == sourceEventKey,
                     ct);
 
         if (alreadyProcessed)
         {
-            user.LastChatMessageNormalized = normalizedMessage;
+            if (enforceRepeatedMessageCheck && normalizedMessage is not null)
+            {
+                user.LastChatMessageNormalized = normalizedMessage;
+            }
+
             user.LastSeenAtUtc = DateTime.UtcNow;
 
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
 
-            return new MessageRewardResult(
+            return new RewardResult(
                 Rewarded: false,
                 AlreadyProcessed: true,
                 RepeatedMessage: false,
                 Balance: user.Points);
         }
 
-        // Segunda barreira: a mensagem é igual à última mensagem recebida
-        // deste usuário, inclusive após reiniciar o Worker.
+        // Segunda barreira: apenas mensagens de chat usam a regra
+        // de não pontuar a mesma mensagem consecutivamente.
         var repeatedMessage =
+            enforceRepeatedMessageCheck &&
+            normalizedMessage is not null &&
             string.Equals(
                 user.LastChatMessageNormalized,
                 normalizedMessage,
                 StringComparison.Ordinal);
 
-        user.LastChatMessageNormalized = normalizedMessage;
+        if (enforceRepeatedMessageCheck && normalizedMessage is not null)
+        {
+            user.LastChatMessageNormalized = normalizedMessage;
+        }
+
         user.LastSeenAtUtc = DateTime.UtcNow;
 
         if (repeatedMessage)
@@ -123,7 +134,7 @@ public sealed class SqliteUserRepository(
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
 
-            return new MessageRewardResult(
+            return new RewardResult(
                 Rewarded: false,
                 AlreadyProcessed: false,
                 RepeatedMessage: true,
@@ -144,13 +155,13 @@ public sealed class SqliteUserRepository(
                 Type = type,
                 Description = description,
                 CreatedAtUtc = DateTime.UtcNow,
-                SourceMessageKey = sourceMessageKey
+                SourceMessageKey = sourceEventKey
             });
 
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
-        return new MessageRewardResult(
+        return new RewardResult(
             Rewarded: true,
             AlreadyProcessed: false,
             RepeatedMessage: false,

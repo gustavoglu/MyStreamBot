@@ -6,16 +6,17 @@ namespace MyStreamBot.Application.Services;
 public sealed class EconomyService(
     IUserRepository users)
 {
-    public async Task<MessageRewardResult> TryRewardMessageAsync(
+    public async Task<RewardResult> TryRewardAsync(
         Platform platform,
         string platformUserId,
         string username,
         string? avatarUrl,
-        string normalizedMessage,
-        string sourceMessageKey,
+        string? normalizedMessage,
+        string sourceEventKey,
         long amount,
         PointTransactionType type,
         string? description = null,
+        bool enforceRepeatedMessageCheck = false,
         CancellationToken ct = default)
     {
         if (amount <= 0)
@@ -33,13 +34,14 @@ public sealed class EconomyService(
             avatarUrl,
             ct);
 
-        return await users.TryRewardMessageAsync(
+        return await users.TryRewardAsync(
             user,
             normalizedMessage,
-            sourceMessageKey,
+            sourceEventKey,
             amount,
             type,
             description,
+            enforceRepeatedMessageCheck,
             ct);
     }
 

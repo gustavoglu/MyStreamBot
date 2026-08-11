@@ -11,6 +11,7 @@ public sealed record AxelChatMessage(
     string Text,
     DateTime? PublishedAt,
     bool Deleted,
+    string EventType,
     string RawJson);
 public sealed record AxelChatServiceState(
     string TypeId,
