@@ -1,11 +1,13 @@
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MyStreamBot.Application.Integrations.AxelChat;
 using MyStreamBot.Application.Services;
 using MyStreamBot.Core.Enums;
+using MyStreamBot.Infrastructure.Economy;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace MyStreamBot.Infrastructure.AxelChat;
 
@@ -13,10 +15,16 @@ public sealed class AxelChatHostedService(
     IAxelChatClient axelChatClient,
     IServiceScopeFactory scopeFactory,
     ChatHistoryLogger historyLogger,
+    IOptions<EconomyOptions> economyOptions,
     ILogger<AxelChatHostedService> logger) : BackgroundService
 {
     private const long MessageReward = 10;
 
+    private readonly HashSet<string> _excludedUsernames =
+        economyOptions.Value.ExcludedUsernames
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     protected override async Task ExecuteAsync(
         CancellationToken stoppingToken)
@@ -28,6 +36,13 @@ public sealed class AxelChatHostedService(
             "WORKER_STARTED",
             "MyStreamBot AxelChat HostedService iniciado.",
             stoppingToken);
+
+        if (_excludedUsernames.Count > 0)
+        {
+            logger.LogInformation(
+                "Usuários excluídos da economia: {Users}",
+                string.Join(", ", _excludedUsernames));
+        }
 
         axelChatClient.EventReceived +=
             OnAxelChatEventAsync;
@@ -80,7 +95,6 @@ public sealed class AxelChatHostedService(
         if (cancellationToken.IsCancellationRequested)
             return;
 
-        // Mantemos eventos brutos no histórico para facilitar a análise dos testes.
         try
         {
             await historyLogger.WriteEventAsync(
@@ -196,6 +210,27 @@ public sealed class AxelChatHostedService(
             }
 
             var normalizedText = NormalizeMessage(message.Text);
+
+            // Bots/sistemas excluídos não passam pelo EconomyService.
+            // Mesmo assim, a mensagem continua sendo registrada no histórico.
+            if (_excludedUsernames.Contains(message.Username.Trim()))
+            {
+                logger.LogInformation(
+                    "[POINTS] {Username} ignorado: usuário excluído da economia. Platform={Platform}",
+                    message.Username,
+                    message.Platform);
+
+                await LogMessageSafelyAsync(
+                    message,
+                    "IGNORED",
+                    0,
+                    null,
+                    "Usuário excluído da economia.",
+                    cancellationToken);
+
+                continue;
+            }
+
             var sourceMessageKey = BuildSourceMessageKey(
                 message,
                 normalizedText);
@@ -291,7 +326,6 @@ public sealed class AxelChatHostedService(
         }
         catch (Exception ex)
         {
-            // O histórico nunca deve derrubar o processamento do chat.
             logger.LogError(
                 ex,
                 "Falha ao gravar mensagem {MessageId} no histórico local.",
@@ -306,16 +340,11 @@ public sealed class AxelChatHostedService(
         var platform = message.Platform.ToString();
         var userId = message.UserId.Trim();
 
-        // O MessageId é a melhor identidade porque é fornecido pelo AxelChat
-        // e permanece igual quando o evento é reenviado após um restart.
         if (!string.IsNullOrWhiteSpace(message.MessageId))
         {
             return $"message-id:{platform}:{userId}:{message.MessageId.Trim()}";
         }
 
-        // Fallback: plataforma + usuário + instante de publicação + texto.
-        // Assim, a mesma mensagem com a mesma data/hora não é recompensada
-        // novamente mesmo que o AxelChat não forneça MessageId.
         if (message.PublishedAt is DateTime publishedAt)
         {
             var utc = publishedAt.Kind == DateTimeKind.Utc
@@ -325,10 +354,12 @@ public sealed class AxelChatHostedService(
             return $"published:{platform}:{userId}:{utc.Ticks}:{normalizedMessage}";
         }
 
-        // Último fallback para payloads que não fornecem MessageId nem data.
-        // O hash evita uma chave gigantesca no SQLite.
-        var raw = $"{platform}|{userId}|{normalizedMessage}|{message.RawJson}";
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
+        var raw =
+            $"{platform}|{userId}|{normalizedMessage}|{message.RawJson}";
+
+        var hash =
+            SHA256.HashData(
+                Encoding.UTF8.GetBytes(raw));
 
         return $"raw:{Convert.ToHexString(hash)}";
     }
@@ -339,7 +370,9 @@ public sealed class AxelChatHostedService(
         return string.Join(
             ' ',
             text.Trim()
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                .Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries))
             .ToUpperInvariant();
     }
 }
