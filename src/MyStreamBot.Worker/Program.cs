@@ -8,10 +8,7 @@ Console.InputEncoding = Encoding.UTF8;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-var dbPath = Path.Combine(
-    AppContext.BaseDirectory,
-    "data",
-    "mystreambot.db");
+var dbPath = ResolveDatabasePath();
 
 Directory.CreateDirectory(
     Path.GetDirectoryName(dbPath)!);
@@ -25,6 +22,35 @@ var host = builder.Build();
 await EnsureDatabaseSchemaAsync(host.Services);
 
 await host.RunAsync();
+
+static string ResolveDatabasePath()
+{
+    var commonDirectory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MyStreamBot");
+
+    Directory.CreateDirectory(commonDirectory);
+
+    var commonPath = Path.Combine(commonDirectory, "mystreambot.db");
+
+    // Compatibilidade com as versões anteriores: se o banco antigo ainda
+    // existir ao lado do Worker e o banco compartilhado não existir, copia-o
+    // uma única vez para o local comum usado pelo Worker e pelo Overlay.
+    var legacyPath = Path.Combine(
+        AppContext.BaseDirectory,
+        "data",
+        "mystreambot.db");
+
+    if (!File.Exists(commonPath) && File.Exists(legacyPath))
+    {
+        File.Copy(legacyPath, commonPath);
+        Console.WriteLine($"Banco existente migrado para: {commonPath}");
+    }
+
+    Console.WriteLine($"Banco SQLite: {commonPath}");
+
+    return commonPath;
+}
 
 static async Task EnsureDatabaseSchemaAsync(
     IServiceProvider services)
