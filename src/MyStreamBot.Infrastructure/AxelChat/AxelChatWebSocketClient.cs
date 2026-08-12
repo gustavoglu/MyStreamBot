@@ -312,6 +312,12 @@ public sealed class AxelChatWebSocketClient(
                     "id")
                 ?? string.Empty;
 
+            var eventType =
+                GetString(
+                    message,
+                    "eventType")
+                ?? "Message";
+
             var userId =
                 GetString(
                     author,
@@ -373,8 +379,9 @@ public sealed class AxelChatWebSocketClient(
                 message.GetRawText();
 
             logger.LogInformation(
-                "[AXELCHAT] MessageId={MessageId} | ServiceId='{ServiceId}' | Platform={Platform} | UserId={UserId} | Username='{Username}' | AvatarUrl='{AvatarUrl}' | Message='{Message}' | Deleted={Deleted}",
+                "[AXELCHAT] MessageId={MessageId} | EventType='{EventType}' | ServiceId='{ServiceId}' | Platform={Platform} | UserId={UserId} | Username='{Username}' | AvatarUrl='{AvatarUrl}' | Message='{Message}' | Deleted={Deleted}",
                 messageId,
+                eventType,
                 serviceId,
                 platform,
                 userId,
@@ -393,6 +400,7 @@ public sealed class AxelChatWebSocketClient(
                     text,
                     publishedAt,
                     deleted,
+                    eventType,
                     rawJson));
         }
 

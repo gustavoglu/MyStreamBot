@@ -17,7 +17,7 @@ public sealed class PointTransaction
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     /// <summary>
-    /// Identificador determinístico da mensagem que originou a recompensa.
+    /// Identificador determinístico do evento que originou a recompensa.
     /// É único para impedir que o mesmo evento recebido novamente pelo AxelChat
     /// gere uma segunda recompensa depois de um restart/reconexão.
     /// </summary>

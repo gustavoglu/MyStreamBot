@@ -1,13 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MyStreamBot.Application.Abstractions;
 using MyStreamBot.Application.Integrations.AxelChat;
 using MyStreamBot.Application.Services;
 using MyStreamBot.Infrastructure.AxelChat;
-using Microsoft.Extensions.Configuration;
+using MyStreamBot.Infrastructure.Economy;
 using MyStreamBot.Infrastructure.Persistence;
 using MyStreamBot.Infrastructure.Repositories;
+
 namespace MyStreamBot.Infrastructure;
+
 public static class DependencyInjection
 {
     public static IServiceCollection AddMyStreamBotInfrastructure(
@@ -15,13 +18,20 @@ public static class DependencyInjection
         string connectionString,
         IConfiguration configuration)
     {
-        services.AddDbContext<MyStreamBotDbContext>(o => o.UseSqlite(connectionString));
+        services.AddDbContext<MyStreamBotDbContext>(
+            o => o.UseSqlite(connectionString));
+
         services.AddScoped<IUserRepository, SqliteUserRepository>();
         services.AddScoped<EconomyService>();
+
         services.AddSingleton<ChatHistoryLogger>();
+
+        services.Configure<EconomyOptions>(
+            configuration.GetSection(EconomyOptions.SectionName));
 
         services.Configure<AxelChatOptions>(
             configuration.GetSection(AxelChatOptions.SectionName));
+
         services.AddSingleton<IAxelChatClient, AxelChatWebSocketClient>();
         services.AddHostedService<AxelChatHostedService>();
 

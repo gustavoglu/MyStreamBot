@@ -12,13 +12,14 @@ public interface IUserRepository
         string? avatarUrl,
         CancellationToken ct = default);
 
-    Task<MessageRewardResult> TryRewardMessageAsync(
+    Task<RewardResult> TryRewardAsync(
         StreamerUser user,
-        string normalizedMessage,
-        string sourceMessageKey,
+        string? normalizedMessage,
+        string sourceEventKey,
         long amount,
         PointTransactionType type,
         string? description,
+        bool enforceRepeatedMessageCheck,
         CancellationToken ct = default);
 
     Task SaveAsync(
@@ -30,7 +31,7 @@ public interface IUserRepository
         CancellationToken ct = default);
 }
 
-public sealed record MessageRewardResult(
+public sealed record RewardResult(
     bool Rewarded,
     bool AlreadyProcessed,
     bool RepeatedMessage,
