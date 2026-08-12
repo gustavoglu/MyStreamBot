@@ -94,10 +94,11 @@ body { width:460px; }
 .avatar { width:44px; height:44px; border-radius:50%; object-fit:cover; background:#303540; flex:0 0 44px; }
 .info { min-width:0; flex:1; }
 .name { font-size:14px; font-weight:750; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.total { color:#b8c0cc; font-size:11px; margin-top:3px; }
-.gain { font-size:19px; font-weight:900; white-space:nowrap; }
+.type { color:#8993a3; font-size:10px; text-transform:uppercase; letter-spacing:.7px; margin-top:4px; }
+.reward { display:flex; align-items:baseline; justify-content:flex-end; gap:8px; flex:0 0 auto; white-space:nowrap; }
+.total-now { color:#d5dbe5; font-size:19px; font-weight:900; }
+.gain { font-size:19px; font-weight:900; }
 .gain.positive { color:#6dff9b; }
-.type { color:#8993a3; font-size:10px; text-transform:uppercase; letter-spacing:.7px; margin-top:2px; }
 .empty { color:#8f98a7; font-size:13px; padding:16px 4px; }
 @keyframes enter { from { opacity:0; transform:translateY(-18px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
 </style>
@@ -134,10 +135,12 @@ async function refresh() {
         <img class="avatar" src="${user.avatarUrl || fallbackAvatar}" onerror="this.src='${fallbackAvatar}'">
         <div class="info">
           <div class="name">${escapeHtml(user.username)}</div>
-          <div class="total">Total: ${formatPoints(user.points)} pontos</div>
           <div class="type">${typeLabel(item.type)}</div>
         </div>
-        <div class="gain positive">+${formatPoints(item.amount)}</div>`;
+        <div class="reward">
+          <div class="total-now">(${formatPoints(user.points)})</div>
+          <div class="gain positive">+${formatPoints(item.amount)}</div>
+        </div>`;
       root.appendChild(row);
       knownIds.add(item.id);
     }
