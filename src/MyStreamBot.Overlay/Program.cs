@@ -16,19 +16,10 @@ app.MapGet("/api/top", async (IDbContextFactory<MyStreamBotDbContext> factory, C
     try
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var users = await db.Users.AsNoTracking()
-            .Where(x => x.Points > 0)
-            .OrderByDescending(x => x.Points)
-            .ThenBy(x => x.Username)
-            .Take(5)
-            .Select(x => new { x.Id, x.Username, x.AvatarUrl, x.Points })
-            .ToListAsync(ct);
+        var users = await db.Users.AsNoTracking().Where(x => x.Points > 0).OrderByDescending(x => x.Points).ThenBy(x => x.Username).Take(5).Select(x => new { x.Id, x.Username, x.AvatarUrl, x.Points }).ToListAsync(ct);
         return Results.Ok(users);
     }
-    catch (OperationCanceledException)
-    {
-        return Results.StatusCode(499);
-    }
+    catch (OperationCanceledException) { return Results.StatusCode(499); }
 });
 
 app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory, CancellationToken ct) =>
@@ -36,26 +27,10 @@ app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory
     try
     {
         await using var db = await factory.CreateDbContextAsync(ct);
-        var updates = await db.PointTransactions.AsNoTracking()
-            .Where(x => x.Amount > 0)
-            .OrderByDescending(x => x.CreatedAtUtc)
-            .Take(5)
-            .Select(x => new
-            {
-                x.Id,
-                x.Amount,
-                x.Type,
-                x.Description,
-                x.CreatedAtUtc,
-                User = x.User == null ? null : new { x.User.Username, x.User.AvatarUrl, x.User.Points }
-            })
-            .ToListAsync(ct);
+        var updates = await db.PointTransactions.AsNoTracking().Where(x => x.Amount > 0).OrderByDescending(x => x.CreatedAtUtc).Take(5).Select(x => new { x.Id, x.Amount, x.Type, x.Description, x.CreatedAtUtc, User = x.User == null ? null : new { x.User.Username, x.User.AvatarUrl, x.User.Points } }).ToListAsync(ct);
         return Results.Ok(updates);
     }
-    catch (OperationCanceledException)
-    {
-        return Results.StatusCode(499);
-    }
+    catch (OperationCanceledException) { return Results.StatusCode(499); }
 });
 
 app.Run();
@@ -71,8 +46,7 @@ static string RecentHtml() => """
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MyStreamBot - Últimas atualizações</title><style>
 :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;font-family:Arial,Helvetica,sans-serif;color:#fff}body{width:460px;overflow:hidden}.panel{padding:14px;background:transparent}.title,.subtitle,.update{opacity:0;transform:translateX(-90px)}.title{font-size:19px;font-weight:800;margin:0 0 10px}.subtitle{color:#aeb5c2;font-size:12px;margin:-6px 0 12px}.update{display:flex;align-items:center;gap:11px;min-height:66px;padding:9px 10px;margin:7px 0;border-radius:13px;background:transparent;overflow:hidden}.avatar{width:44px;height:44px;border-radius:50%;object-fit:cover;background:transparent;flex:0 0 44px}.info{min-width:0;flex:1}.name{font-size:14px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.type{color:#8993a3;font-size:10px;text-transform:uppercase;letter-spacing:.7px;margin-top:4px}.reward{display:flex;align-items:baseline;justify-content:flex-end;gap:8px;flex:0 0 auto;white-space:nowrap}.total-now{color:#d5dbe5;font-size:19px;font-weight:900}.gain{font-size:19px;font-weight:900;color:#6dff9b}.empty{color:#8f98a7;font-size:13px;padding:16px 4px}.show-title,.show-line{animation:slideIn .55s cubic-bezier(.22,.8,.24,1) forwards}.fade-out{animation:fadeOut .7s ease forwards!important}@keyframes slideIn{from{opacity:0;transform:translateX(-90px)}to{opacity:1;transform:translateX(0)}}@keyframes fadeOut{from{opacity:1}to{opacity:0}}
 </style></head><body><div class="panel" id="panel"><div class="title" id="title">⚡ Últimas atualizações</div><div class="subtitle" id="subtitle">Pontos recebidos pelos viewers</div><div id="updates"></div></div><script>
-const fallbackAvatar='data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="transparent"/><circle cx="40" cy="31" r="14" fill="#9aa3b2"/><path d="M15 72c3-17 47-17 50 0" fill="#9aa3b2"/></svg>');
-let latest=[];let refreshing=false;const panel=document.getElementById('panel'),title=document.getElementById('title'),subtitle=document.getElementById('subtitle'),updates=document.getElementById('updates');
+const fallbackAvatar='data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="transparent"/><circle cx="40" cy="31" r="14" fill="#9aa3b2"/><path d="M15 72c3-17 47-17 50 0" fill="#9aa3b2"/></svg>');let latest=[];let refreshing=false;const panel=document.getElementById('panel'),title=document.getElementById('title'),subtitle=document.getElementById('subtitle'),updates=document.getElementById('updates');
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}function formatPoints(v){return Number(v||0).toLocaleString('pt-BR')}function typeLabel(t){const l={MessageReward:'MENSAGEM',Follow:'FOLLOW',Subscription:'INSCRIÇÃO',Gift:'GIFT',Donation:'DOAÇÃO',Bonus:'BÔNUS',Admin:'ADMIN',Penalty:'PENALIDADE',BetWin:'APOSTA'};return l[t]||String(t||'PONTOS').toUpperCase()}function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function render(){updates.innerHTML='';if(!latest.length){updates.innerHTML='<div class="empty">Nenhuma atualização ainda.</div>';return}for(const item of latest){if(!item.user)continue;const row=document.createElement('div');row.className='update';row.innerHTML=`<img class="avatar" src="${item.user.avatarUrl||fallbackAvatar}" onerror="this.src='${fallbackAvatar}'"><div class="info"><div class="name">${escapeHtml(item.user.username)}</div><div class="type">${typeLabel(item.type)}</div></div><div class="reward"><div class="total-now">(${formatPoints(item.user.points)})</div><div class="gain">+${formatPoints(item.amount)}</div></div>`;updates.appendChild(row)}}
 async function refresh(){if(refreshing)return false;refreshing=true;try{const response=await fetch('/api/recent?ts='+Date.now(),{cache:'no-store'});if(!response.ok)return false;latest=await response.json();return true}catch{return false}finally{refreshing=false}}
@@ -84,12 +58,12 @@ refresh();setInterval(refresh,2000);cycle();
 static string TopHtml() => """
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MyStreamBot - Top 5</title><style>
 :root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent;font-family:Arial,Helvetica,sans-serif;color:#fff}body{width:390px;overflow:hidden}.panel{padding:15px;background:transparent}.title,.item{opacity:0;transform:translateX(-90px)}.title{font-size:20px;font-weight:900;margin-bottom:13px}.item{display:flex;align-items:center;gap:10px;min-height:58px;padding:8px 10px;margin:7px 0;border-radius:13px;background:transparent}.rank{width:30px;text-align:center;font-size:22px;font-weight:900;flex:0 0 30px}.avatar{width:42px;height:42px;border-radius:50%;object-fit:cover;background:transparent;flex:0 0 42px}.info{min-width:0;flex:1}.name{font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.label{color:#8f98a7;font-size:10px;margin-top:2px;text-transform:uppercase;letter-spacing:.6px}.points{font-size:18px;font-weight:900;white-space:nowrap}.empty{color:#8f98a7;font-size:13px;padding:14px 2px}.show-title,.show-line{animation:slideIn .55s cubic-bezier(.22,.8,.24,1) forwards}.fade-out{animation:fadeOut .7s ease forwards!important}@keyframes slideIn{from{opacity:0;transform:translateX(-90px)}to{opacity:1;transform:translateX(0)}}@keyframes fadeOut{from{opacity:1}to{opacity:0}}
-</style></head><body><div class="panel" id="panel"><div class="title" id="title">🏆 TOP 5 PONTOS</div><div id="top"></div></div><script>
-const fallbackAvatar='data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="transparent"/><circle cx="40" cy="31" r="14" fill="#9aa3b2"/><path d="M15 72c3-17 47-17 50 0" fill="#9aa3b2"/></svg>');const medals=['🥇','🥈','🥉'];let latest=[];let refreshing=false;const panel=document.getElementById('panel'),title=document.getElementById('title'),top=document.getElementById('top');
+</style></head><body><div class="panel" id="panel"><div class="title" id="title">🏆 TOP 5 PONTOS</div><div id="top-list"></div></div><script>
+const fallbackAvatar='data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="transparent"/><circle cx="40" cy="31" r="14" fill="#9aa3b2"/><path d="M15 72c3-17 47-17 50 0" fill="#9aa3b2"/></svg>');const medals=['🥇','🥈','🥉'];let latest=[];let refreshing=false;const panel=document.getElementById('panel'),title=document.getElementById('title'),topList=document.getElementById('top-list');
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}function formatPoints(v){return Number(v||0).toLocaleString('pt-BR')}function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function render(){top.innerHTML='';if(!latest.length){top.innerHTML='<div class="empty">Nenhuma pontuação ainda.</div>';return}latest.forEach((u,i)=>{const row=document.createElement('div');row.className='item';row.innerHTML=`<div class="rank">${medals[i]||i+1}</div><img class="avatar" src="${escapeHtml(u.avatarUrl||fallbackAvatar)}" onerror="this.src='${fallbackAvatar}'"><div class="info"><div class="name">${escapeHtml(u.username)}</div><div class="label">${i+1}º lugar</div></div><div class="points">${formatPoints(u.points)}</div>`;top.appendChild(row)})}
+function render(){topList.innerHTML='';if(!latest.length){topList.innerHTML='<div class="empty">Nenhuma pontuação ainda.</div>';return}latest.forEach((u,i)=>{const row=document.createElement('div');row.className='item';row.innerHTML=`<div class="rank">${medals[i]||i+1}</div><img class="avatar" src="${escapeHtml(u.avatarUrl||fallbackAvatar)}" onerror="this.src='${fallbackAvatar}'"><div class="info"><div class="name">${escapeHtml(u.username)}</div><div class="label">${i+1}º lugar</div></div><div class="points">${formatPoints(u.points)}</div>`;topList.appendChild(row)})}
 async function refresh(){if(refreshing)return false;refreshing=true;try{const response=await fetch('/api/top?ts='+Date.now(),{cache:'no-store'});if(!response.ok)return false;latest=await response.json();return true}catch{return false}finally{refreshing=false}}
-async function cycle(){await refresh();while(true){render();panel.classList.remove('fade-out');title.className='title';[...top.children].forEach(x=>x.className='item');await sleep(80);title.classList.add('show-title');await sleep(220);for(const row of [...top.children]){row.classList.add('show-line');await sleep(180)}await sleep(5000);panel.classList.add('fade-out');await sleep(700);panel.classList.remove('fade-out');title.className='title';[...top.children].forEach(x=>x.className='item');await sleep(10000);await refresh()}}
+async function cycle(){await refresh();while(true){render();panel.classList.remove('fade-out');title.className='title';[...topList.children].forEach(x=>x.className='item');await sleep(80);title.classList.add('show-title');await sleep(220);for(const row of [...topList.children]){row.classList.add('show-line');await sleep(180)}await sleep(5000);panel.classList.add('fade-out');await sleep(700);panel.classList.remove('fade-out');title.className='title';[...topList.children].forEach(x=>x.className='item');await sleep(10000);await refresh()}}
 refresh();setInterval(refresh,2000);cycle();
 </script></body></html>
 """;
