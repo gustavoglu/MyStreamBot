@@ -23,37 +23,20 @@ app.MapGet("/api/top", async (IDbContextFactory<MyStreamBotDbContext> factory, C
     try
     {
         var cached = topCache;
-        if (cached is not null && cached.IsValid(cacheLifetime))
-            return Results.Ok(cached.Value);
-
+        if (cached is not null && cached.IsValid(cacheLifetime)) return Results.Ok(cached.Value);
         await topGate.WaitAsync(ct);
         try
         {
             cached = topCache;
-            if (cached is not null && cached.IsValid(cacheLifetime))
-                return Results.Ok(cached.Value);
-
+            if (cached is not null && cached.IsValid(cacheLifetime)) return Results.Ok(cached.Value);
             await using var db = await factory.CreateDbContextAsync(ct);
-            var users = await db.Users.AsNoTracking()
-                .Where(x => x.Points > 0)
-                .OrderByDescending(x => x.Points)
-                .ThenBy(x => x.Username)
-                .Take(5)
-                .Select(x => new TopUserDto(x.Id, x.Username, x.AvatarUrl, x.Points))
-                .ToListAsync(ct);
-
+            var users = await db.Users.AsNoTracking().Where(x => x.Points > 0).OrderByDescending(x => x.Points).ThenBy(x => x.Username).Take(5).Select(x => new TopUserDto(x.Id, x.Username, x.AvatarUrl, x.Points)).ToListAsync(ct);
             topCache = new CachedValue<IReadOnlyList<TopUserDto>>(users);
             return Results.Ok(users);
         }
-        finally
-        {
-            topGate.Release();
-        }
+        finally { topGate.Release(); }
     }
-    catch (OperationCanceledException)
-    {
-        return Results.StatusCode(499);
-    }
+    catch (OperationCanceledException) { return Results.StatusCode(499); }
 });
 
 app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory, CancellationToken ct) =>
@@ -61,55 +44,27 @@ app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory
     try
     {
         var cached = recentCache;
-        if (cached is not null && cached.IsValid(cacheLifetime))
-            return Results.Ok(cached.Value);
-
+        if (cached is not null && cached.IsValid(cacheLifetime)) return Results.Ok(cached.Value);
         await recentGate.WaitAsync(ct);
         try
         {
             cached = recentCache;
-            if (cached is not null && cached.IsValid(cacheLifetime))
-                return Results.Ok(cached.Value);
-
+            if (cached is not null && cached.IsValid(cacheLifetime)) return Results.Ok(cached.Value);
             await using var db = await factory.CreateDbContextAsync(ct);
-            var updates = await db.PointTransactions.AsNoTracking()
-                .Where(x => x.Amount > 0)
-                .OrderByDescending(x => x.CreatedAtUtc)
-                .Take(5)
-                .Select(x => new RecentItemDto(
-                    x.Id,
-                    x.Amount,
-                    x.Type.ToString(),
-                    x.Description,
-                    x.CreatedAtUtc,
-                    x.User == null ? null : new RecentUserDto(
-                        x.User.Username,
-                        x.User.AvatarUrl,
-                        x.User.Points)))
-                .ToListAsync(ct);
-
+            var updates = await db.PointTransactions.AsNoTracking().Where(x => x.Amount > 0).OrderByDescending(x => x.CreatedAtUtc).Take(5).Select(x => new RecentItemDto(x.Id, x.Amount, x.Type.ToString(), x.Description, x.CreatedAtUtc, x.User == null ? null : new RecentUserDto(x.User.Username, x.User.AvatarUrl, x.User.Points))).ToListAsync(ct);
             recentCache = new CachedValue<IReadOnlyList<RecentItemDto>>(updates);
             return Results.Ok(updates);
         }
-        finally
-        {
-            recentGate.Release();
-        }
+        finally { recentGate.Release(); }
     }
-    catch (OperationCanceledException)
-    {
-        return Results.StatusCode(499);
-    }
+    catch (OperationCanceledException) { return Results.StatusCode(499); }
 });
 
 app.Run();
 
 static string ResolveDatabasePath()
 {
-    var directory = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "MyStreamBot");
-
+    var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyStreamBot");
     Directory.CreateDirectory(directory);
     return Path.Combine(directory, "mystreambot.db");
 }
@@ -134,11 +89,11 @@ const panel=document.getElementById('panel'),title=document.getElementById('titl
 function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
 function formatPoints(v){return Number(v||0).toLocaleString('pt-BR')}
 function typeLabel(t){const l={MessageReward:'MENSAGEM',Follow:'FOLLOW',Subscription:'INSCRIÇÃO',Gift:'GIFT',Donation:'DOAÇÃO',Bonus:'BÔNUS',Admin:'ADMIN',Penalty:'PENALIDADE',BetWin:'APOSTA'};return l[t]||String(t||'PONTOS').toUpperCase()}
-function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function escapeHtml(v){return String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
 function render(){updates.innerHTML='';if(!latest.length){updates.innerHTML='<div class="empty">Nenhuma atualização ainda.</div>';return}for(const item of latest){if(!item.user)continue;const row=document.createElement('div');row.className='update';row.innerHTML=`<img class="avatar" src="${item.user.avatarUrl||fallbackAvatar}" onerror="this.src='${fallbackAvatar}'"><div class="info"><div class="name">${escapeHtml(item.user.username)}</div><div class="type">${typeLabel(item.type)}</div></div><div class="reward"><div class="total-now">(${formatPoints(item.user.points)})</div><div class="gain">+${formatPoints(item.amount)}</div></div>`;updates.appendChild(row)}}
 async function refresh(){if(refreshing)return false;refreshing=true;try{const response=await fetch('/api/recent?ts='+Date.now(),{cache:'no-store'});if(!response.ok)return false;latest=await response.json();return true}catch{return false}finally{refreshing=false}}
 async function poll(){while(true){await refresh();await sleep(2000)}}
-async function cycle(){await refresh();while(true){render();panel.classList.remove('fade-out');title.className='title';subtitle.className='subtitle';[...updates.children].forEach(x=>x.className='update');await sleep(80);title.classList.add('show-title');await sleep(160);subtitle.classList.add('show-title');await sleep(160);for(const row of [...updates.children]){row.classList.add('show-line');await sleep(150)}await sleep(5000);panel.classList.add('fade-out');await sleep(700);panel.classList.remove('fade-out');title.className='title';subtitle.className='subtitle';[...updates.children].forEach(x=>x.className='update');await sleep(10000)}}
+async function cycle(){await refresh();while(true){render();panel.classList.remove('fade-out');title.className='title';subtitle.className='subtitle';[...updates.children].forEach(x=>x.className='update');await sleep(80);title.classList.add('show-title');await sleep(160);subtitle.classList.add('show-title');await sleep(160);for(const row of [...updates.children]){row.classList.add('show-line');await sleep(150)}await sleep(10000);panel.classList.add('fade-out');await sleep(700);panel.classList.remove('fade-out');title.className='title';subtitle.className='subtitle';[...updates.children].forEach(x=>x.className='update');await sleep(10000)}}
 poll();cycle();
 </script>
 </body>
@@ -153,11 +108,11 @@ static string TopHtml() => """
 </head><body><div class="panel" id="panel"><div class="title" id="title">🏆 TOP 5 PONTOS</div><div id="top-list"></div></div>
 <script>
 const fallbackAvatar='data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="100%" height="100%" fill="transparent"/><circle cx="40" cy="31" r="14" fill="#9aa3b2"/><path d="M15 72c3-17 47-17 50 0" fill="#9aa3b2"/></svg>');const medals=['🥇','🥈','🥉'];let latest=[];let refreshing=false;const panel=document.getElementById('panel'),title=document.getElementById('title'),topList=document.getElementById('top-list');
-function sleep(ms){return new Promise(r=>setTimeout(r,ms))}function formatPoints(v){return Number(v||0).toLocaleString('pt-BR')}function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}function formatPoints(v){return Number(v||0).toLocaleString('pt-BR')}function escapeHtml(v){return String(v??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]))}
 function render(){topList.innerHTML='';if(!latest.length){topList.innerHTML='<div class="empty">Nenhuma pontuação ainda.</div>';return}latest.forEach((u,i)=>{const row=document.createElement('div');row.className='item';row.innerHTML=`<div class="rank">${medals[i]||i+1}</div><img class="avatar" src="${escapeHtml(u.avatarUrl||fallbackAvatar)}" onerror="this.src='${fallbackAvatar}'"><div class="info"><div class="name">${escapeHtml(u.username)}</div><div class="label">${i+1}º lugar</div></div><div class="points">${formatPoints(u.points)}</div>`;topList.appendChild(row)})}
 async function refresh(){if(refreshing)return false;refreshing=true;try{const response=await fetch('/api/top?ts='+Date.now(),{cache:'no-store'});if(!response.ok)return false;latest=await response.json();return true}catch{return false}finally{refreshing=false}}
 async function poll(){while(true){await refresh();await sleep(2000)}}
-async function cycle(){await refresh();while(true){render();panel.classList.remove('fade-out');title.className='title';[...topList.children].forEach(x=>x.className='item');await sleep(80);title.classList.add('show-title');await sleep(220);for(const row of [...topList.children]){row.classList.add('show-line');await sleep(180)}await sleep(5000);panel.classList.add('fade-out');await sleep(700);panel.classList.remove('fade-out');title.className='title';[...topList.children].forEach(x=>x.className='item');await sleep(10000)}}
+async function cycle(){await refresh();while(true){render();panel.classList.remove('fade-out');title.className='title';[...topList.children].forEach(x=>x.className='item');await sleep(80);title.classList.add('show-title');await sleep(220);for(const row of [...topList.children]){row.classList.add('show-line');await sleep(180)}await sleep(10000);panel.classList.add('fade-out');await sleep(700);panel.classList.remove('fade-out');title.className='title';[...topList.children].forEach(x=>x.className='item');await sleep(10000)}}
 poll();cycle();
 </script></body></html>
 """;
