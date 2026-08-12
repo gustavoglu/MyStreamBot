@@ -3,12 +3,7 @@ using MyStreamBot.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var dbPath = Path.Combine(
-    AppContext.BaseDirectory,
-    "data",
-    "mystreambot.db");
-
-Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+var dbPath = ResolveDatabasePath();
 
 builder.Services.AddDbContextFactory<MyStreamBotDbContext>(options =>
     options.UseSqlite($"Data Source={dbPath}"));
@@ -68,6 +63,16 @@ app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory
 });
 
 app.Run();
+
+static string ResolveDatabasePath()
+{
+    var directory = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "MyStreamBot");
+
+    Directory.CreateDirectory(directory);
+    return Path.Combine(directory, "mystreambot.db");
+}
 
 static string Html() => """
 <!doctype html>
