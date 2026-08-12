@@ -78,7 +78,7 @@ app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory
                 .Select(x => new RecentItemDto(
                     x.Id,
                     x.Amount,
-                    x.Type,
+                    x.Type.ToString(),
                     x.Description,
                     x.CreatedAtUtc,
                     x.User == null ? null : new RecentUserDto(
@@ -113,17 +113,17 @@ sealed record CachedValue<T>(T Value)
     public bool IsValid(TimeSpan lifetime) => DateTime.UtcNow - CreatedAtUtc < lifetime;
 }
 
-sealed record TopUserDto(int Id, string Username, string? AvatarUrl, int Points);
+sealed record TopUserDto(long Id, string Username, string? AvatarUrl, long Points);
 
 sealed record RecentItemDto(
-    int Id,
-    int Amount,
+    long Id,
+    long Amount,
     string Type,
     string? Description,
     DateTime CreatedAtUtc,
     RecentUserDto? User);
 
-sealed record RecentUserDto(string Username, string? AvatarUrl, int Points);
+sealed record RecentUserDto(string Username, string? AvatarUrl, long Points);
 
 static string RecentHtml() => """
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MyStreamBot - Últimas atualizações</title><style>
