@@ -6,6 +6,15 @@ var dbPath = ResolveDatabasePath();
 builder.Services.AddDbContextFactory<MyStreamBotDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 var app = builder.Build();
 
+// Multiple OBS Browser Sources can request the same endpoint at the same time.
+// Serialize database reads per endpoint and reuse the result briefly so a slow
+// SQLite query cannot be flooded by overlapping requests.
+var recentGate = new SemaphoreSlim(1, 1);
+var topGate = new SemaphoreSlim(1, 1);
+CachedValue<IReadOnlyList<RecentItemDto>>? recentCache = null;
+CachedValue<IReadOnlyList<TopUserDto>>? topCache = null;
+var cacheLifetime = TimeSpan.FromSeconds(1);
+
 app.MapGet("/", () => Results.Content(RecentHtml(), "text/html; charset=utf-8"));
 app.MapGet("/recent", () => Results.Content(RecentHtml(), "text/html; charset=utf-8"));
 app.MapGet("/top", () => Results.Content(TopHtml(), "text/html; charset=utf-8"));
@@ -15,9 +24,33 @@ app.MapGet("/api/top", async (IDbContextFactory<MyStreamBotDbContext> factory, C
 {
     try
     {
-        await using var db = await factory.CreateDbContextAsync(ct);
-        var users = await db.Users.AsNoTracking().Where(x => x.Points > 0).OrderByDescending(x => x.Points).ThenBy(x => x.Username).Take(5).Select(x => new { x.Id, x.Username, x.AvatarUrl, x.Points }).ToListAsync(ct);
-        return Results.Ok(users);
+        var cached = topCache;
+        if (cached is not null && cached.IsValid(cacheLifetime))
+            return Results.Ok(cached.Value);
+
+        await topGate.WaitAsync(ct);
+        try
+        {
+            cached = topCache;
+            if (cached is not null && cached.IsValid(cacheLifetime))
+                return Results.Ok(cached.Value);
+
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var users = await db.Users.AsNoTracking()
+                .Where(x => x.Points > 0)
+                .OrderByDescending(x => x.Points)
+                .ThenBy(x => x.Username)
+                .Take(5)
+                .Select(x => new TopUserDto(x.Id, x.Username, x.AvatarUrl, x.Points))
+                .ToListAsync(ct);
+
+            topCache = new CachedValue<IReadOnlyList<TopUserDto>>(users);
+            return Results.Ok(users);
+        }
+        finally
+        {
+            topGate.Release();
+        }
     }
     catch (OperationCanceledException) { return Results.StatusCode(499); }
 });
@@ -26,9 +59,41 @@ app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory
 {
     try
     {
-        await using var db = await factory.CreateDbContextAsync(ct);
-        var updates = await db.PointTransactions.AsNoTracking().Where(x => x.Amount > 0).OrderByDescending(x => x.CreatedAtUtc).Take(5).Select(x => new { x.Id, x.Amount, x.Type, x.Description, x.CreatedAtUtc, User = x.User == null ? null : new { x.User.Username, x.User.AvatarUrl, x.User.Points } }).ToListAsync(ct);
-        return Results.Ok(updates);
+        var cached = recentCache;
+        if (cached is not null && cached.IsValid(cacheLifetime))
+            return Results.Ok(cached.Value);
+
+        await recentGate.WaitAsync(ct);
+        try
+        {
+            cached = recentCache;
+            if (cached is not null && cached.IsValid(cacheLifetime))
+                return Results.Ok(cached.Value);
+
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var updates = await db.PointTransactions.AsNoTracking()
+                .Where(x => x.Amount > 0)
+                .OrderByDescending(x => x.CreatedAtUtc)
+                .Take(5)
+                .Select(x => new RecentItemDto(
+                    x.Id,
+                    x.Amount,
+                    x.Type,
+                    x.Description,
+                    x.CreatedAtUtc,
+                    x.User == null ? null : new RecentUserDto(
+                        x.User.Username,
+                        x.User.AvatarUrl,
+                        x.User.Points)))
+                .ToListAsync(ct);
+
+            recentCache = new CachedValue<IReadOnlyList<RecentItemDto>>(updates);
+            return Results.Ok(updates);
+        }
+        finally
+        {
+            recentGate.Release();
+        }
     }
     catch (OperationCanceledException) { return Results.StatusCode(499); }
 });
@@ -41,6 +106,24 @@ static string ResolveDatabasePath()
     Directory.CreateDirectory(directory);
     return Path.Combine(directory, "mystreambot.db");
 }
+
+sealed record CachedValue<T>(T Value)
+{
+    public DateTime CreatedAtUtc { get; } = DateTime.UtcNow;
+    public bool IsValid(TimeSpan lifetime) => DateTime.UtcNow - CreatedAtUtc < lifetime;
+}
+
+sealed record TopUserDto(int Id, string Username, string? AvatarUrl, int Points);
+
+sealed record RecentItemDto(
+    int Id,
+    int Amount,
+    string Type,
+    string? Description,
+    DateTime CreatedAtUtc,
+    RecentUserDto? User);
+
+sealed record RecentUserDto(string Username, string? AvatarUrl, int Points);
 
 static string RecentHtml() => """
 <!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MyStreamBot - Últimas atualizações</title><style>
