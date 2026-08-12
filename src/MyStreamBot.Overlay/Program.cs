@@ -10,56 +10,97 @@ builder.Services.AddDbContextFactory<MyStreamBotDbContext>(options =>
 
 var app = builder.Build();
 
+// The overlay can be opened by multiple Browser Sources at the same time.
+// These gates + short caches make concurrent requests share a single database read
+// instead of making every Browser Source hit SQLite independently.
+var recentGate = new SemaphoreSlim(1, 1);
+var topGate = new SemaphoreSlim(1, 1);
+CachedValue<IReadOnlyList<RecentItemDto>>? recentCache = null;
+CachedValue<IReadOnlyList<TopUserDto>>? topCache = null;
+var cacheLifetime = TimeSpan.FromMilliseconds(750);
+
 app.MapGet("/", () => Results.Content(Html(), "text/html; charset=utf-8"));
 
 app.MapGet("/api/top", async (IDbContextFactory<MyStreamBotDbContext> factory, CancellationToken ct) =>
 {
-    await using var db = await factory.CreateDbContextAsync(ct);
+    var cached = topCache;
+    if (cached is not null && cached.IsValid(cacheLifetime))
+        return Results.Ok(cached.Value);
 
-    var users = await db.Users
-        .AsNoTracking()
-        .Where(x => x.Points > 0)
-        .OrderByDescending(x => x.Points)
-        .ThenBy(x => x.Username)
-        .Take(10)
-        .Select(x => new
-        {
-            x.Id,
-            x.Username,
-            x.AvatarUrl,
-            x.Points
-        })
-        .ToListAsync(ct);
+    await topGate.WaitAsync(ct);
+    try
+    {
+        // Another request may have populated the cache while we were waiting.
+        cached = topCache;
+        if (cached is not null && cached.IsValid(cacheLifetime))
+            return Results.Ok(cached.Value);
 
-    return Results.Ok(users);
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var users = await db.Users
+            .AsNoTracking()
+            .Where(x => x.Points > 0)
+            .OrderByDescending(x => x.Points)
+            .ThenBy(x => x.Username)
+            .Take(10)
+            .Select(x => new TopUserDto(
+                x.Id,
+                x.Username,
+                x.AvatarUrl,
+                x.Points))
+            .ToListAsync(ct);
+
+        topCache = new CachedValue<IReadOnlyList<TopUserDto>>(users);
+        return Results.Ok(users);
+    }
+    finally
+    {
+        topGate.Release();
+    }
 });
 
 app.MapGet("/api/recent", async (IDbContextFactory<MyStreamBotDbContext> factory, CancellationToken ct) =>
 {
-    await using var db = await factory.CreateDbContextAsync(ct);
+    var cached = recentCache;
+    if (cached is not null && cached.IsValid(cacheLifetime))
+        return Results.Ok(cached.Value);
 
-    var updates = await db.PointTransactions
-        .AsNoTracking()
-        .Where(x => x.Amount > 0)
-        .OrderByDescending(x => x.CreatedAtUtc)
-        .Take(5)
-        .Select(x => new
-        {
-            x.Id,
-            x.Amount,
-            x.Type,
-            x.Description,
-            x.CreatedAtUtc,
-            User = x.User == null ? null : new
-            {
-                x.User.Username,
-                x.User.AvatarUrl,
-                x.User.Points
-            }
-        })
-        .ToListAsync(ct);
+    await recentGate.WaitAsync(ct);
+    try
+    {
+        // Another request may have populated the cache while we were waiting.
+        cached = recentCache;
+        if (cached is not null && cached.IsValid(cacheLifetime))
+            return Results.Ok(cached.Value);
 
-    return Results.Ok(updates);
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var updates = await db.PointTransactions
+            .AsNoTracking()
+            .Where(x => x.Amount > 0)
+            .OrderByDescending(x => x.CreatedAtUtc)
+            .Take(5)
+            .Select(x => new RecentItemDto(
+                x.Id,
+                x.Amount,
+                x.Type,
+                x.Description,
+                x.CreatedAtUtc,
+                x.User == null
+                    ? null
+                    : new RecentUserDto(
+                        x.User.Username,
+                        x.User.AvatarUrl,
+                        x.User.Points)))
+            .ToListAsync(ct);
+
+        recentCache = new CachedValue<IReadOnlyList<RecentItemDto>>(updates);
+        return Results.Ok(updates);
+    }
+    finally
+    {
+        recentGate.Release();
+    }
 });
 
 app.Run();
@@ -73,6 +114,33 @@ static string ResolveDatabasePath()
     Directory.CreateDirectory(directory);
     return Path.Combine(directory, "mystreambot.db");
 }
+
+sealed record CachedValue<T>(T Value)
+{
+    public DateTime CreatedAtUtc { get; } = DateTime.UtcNow;
+
+    public bool IsValid(TimeSpan lifetime) =>
+        DateTime.UtcNow - CreatedAtUtc < lifetime;
+}
+
+sealed record TopUserDto(
+    int Id,
+    string Username,
+    string? AvatarUrl,
+    int Points);
+
+sealed record RecentItemDto(
+    int Id,
+    int Amount,
+    string Type,
+    string? Description,
+    DateTime CreatedAtUtc,
+    RecentUserDto? User);
+
+sealed record RecentUserDto(
+    string Username,
+    string? AvatarUrl,
+    int Points);
 
 static string Html() => """
 <!doctype html>
@@ -119,36 +187,63 @@ function typeLabel(type) {
 }
 
 async function refresh() {
-  try {
-    const response = await fetch('/api/recent?ts=' + Date.now(), { cache:'no-store' });
-    const items = await response.json();
-    const root = document.getElementById('updates');
-    root.innerHTML = '';
-    if (!items.length) { root.innerHTML = '<div class="empty">Aguardando atualizações...</div>'; return; }
-    for (const item of items) {
-      const user = item.user;
-      if (!user) continue;
-      const row = document.createElement('div');
-      row.className = 'update' + (knownIds.has(item.id) ? '' : ' new');
-      row.innerHTML = `
-        <img class="avatar" src="${user.avatarUrl || fallbackAvatar}" onerror="this.src='${fallbackAvatar}'">
-        <div class="info">
-          <div class="name">${escapeHtml(user.username)}</div>
-          <div class="total">Total: ${formatPoints(user.points)} pontos</div>
-          <div class="type">${typeLabel(item.type)}</div>
-        </div>
-        <div class="gain positive">+${formatPoints(item.amount)}</div>`;
-      root.appendChild(row);
-      knownIds.add(item.id);
-    }
-    while (knownIds.size > 50) knownIds.delete(knownIds.values().next().value);
-  } catch { /* Worker/banco ainda pode estar iniciando. */ }
+  const response = await fetch('/api/recent?ts=' + Date.now(), { cache:'no-store' });
+
+  if (!response.ok)
+    throw new Error('HTTP ' + response.status);
+
+  const items = await response.json();
+  const root = document.getElementById('updates');
+  root.innerHTML = '';
+
+  if (!items.length) {
+    root.innerHTML = '<div class="empty">Aguardando atualizações...</div>';
+    return;
+  }
+
+  for (const item of items) {
+    const user = item.user;
+    if (!user) continue;
+
+    const row = document.createElement('div');
+    row.className = 'update' + (knownIds.has(item.id) ? '' : ' new');
+    row.innerHTML = `
+      <img class="avatar" src="${user.avatarUrl || fallbackAvatar}" onerror="this.src='${fallbackAvatar}'">
+      <div class="info">
+        <div class="name">${escapeHtml(user.username)}</div>
+        <div class="total">Total: ${formatPoints(user.points)} pontos</div>
+        <div class="type">${typeLabel(item.type)}</div>
+      </div>
+      <div class="gain positive">+${formatPoints(item.amount)}</div>`;
+    root.appendChild(row);
+    knownIds.add(item.id);
+  }
+
+  while (knownIds.size > 50)
+    knownIds.delete(knownIds.values().next().value);
 }
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-refresh();
-setInterval(refresh, 1000);
+
+async function pollSequentially() {
+  while (true) {
+    try {
+      // IMPORTANT: the next request is only created after this request has
+      // completely finished. setInterval must not be used here because it
+      // can create overlapping requests when the server is slow.
+      await refresh();
+    } catch {
+      // Keep the polling loop alive if the overlay/server is temporarily unavailable.
+    }
+
+    // Wait only after the previous request has completed.
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+pollSequentially();
 </script>
 </body>
 </html>
