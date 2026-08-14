@@ -48,6 +48,7 @@ public static class DependencyInjection
 
         services.AddSingleton<IAxelChatClient, AxelChatWebSocketClient>();
         services.AddHostedService<AxelChatHostedService>();
+        services.AddHostedService<TtsCommandHostedService>();
 
         return services;
     }
