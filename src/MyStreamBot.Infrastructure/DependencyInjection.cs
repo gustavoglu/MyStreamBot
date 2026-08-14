@@ -8,6 +8,7 @@ using MyStreamBot.Infrastructure.AxelChat;
 using MyStreamBot.Infrastructure.Economy;
 using MyStreamBot.Infrastructure.Persistence;
 using MyStreamBot.Infrastructure.Repositories;
+using MyStreamBot.Infrastructure.Tts;
 
 namespace MyStreamBot.Infrastructure;
 
@@ -31,6 +32,19 @@ public static class DependencyInjection
 
         services.Configure<AxelChatOptions>(
             configuration.GetSection(AxelChatOptions.SectionName));
+
+        services.Configure<ElevenLabsOptions>(
+            configuration.GetSection(ElevenLabsOptions.SectionName));
+
+        services.AddHttpClient<ITtsService, ElevenLabsTtsService>((serviceProvider, client) =>
+        {
+            var options = serviceProvider
+                .GetRequiredService<Microsoft.Extensions.Options.IOptions<ElevenLabsOptions>>()
+                .Value;
+
+            client.BaseAddress = new Uri(options.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+        });
 
         services.AddSingleton<IAxelChatClient, AxelChatWebSocketClient>();
         services.AddHostedService<AxelChatHostedService>();
