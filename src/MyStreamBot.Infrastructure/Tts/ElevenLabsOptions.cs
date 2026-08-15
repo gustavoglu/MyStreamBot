@@ -8,6 +8,8 @@ public sealed class ElevenLabsOptions
 
     public string DefaultVoiceId { get; set; } = "";
 
+    public string[] VoiceIds { get; set; } = [];
+
     public string ModelId { get; set; } = "eleven_flash_v2_5";
 
     public string OutputFormat { get; set; } = "mp3_44100_128";
