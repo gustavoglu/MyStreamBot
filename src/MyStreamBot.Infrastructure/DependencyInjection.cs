@@ -19,31 +19,28 @@ public static class DependencyInjection
         string connectionString,
         IConfiguration configuration)
     {
-        services.AddDbContext<MyStreamBotDbContext>(
-            o => o.UseSqlite(connectionString));
-
+        services.AddDbContext<MyStreamBotDbContext>(o => o.UseSqlite(connectionString));
         services.AddScoped<IUserRepository, SqliteUserRepository>();
         services.AddScoped<EconomyService>();
-
         services.AddSingleton<ChatHistoryLogger>();
 
-        services.Configure<EconomyOptions>(
-            configuration.GetSection(EconomyOptions.SectionName));
-
-        services.Configure<AxelChatOptions>(
-            configuration.GetSection(AxelChatOptions.SectionName));
-
-        services.Configure<ElevenLabsOptions>(
-            configuration.GetSection(ElevenLabsOptions.SectionName));
+        services.Configure<EconomyOptions>(configuration.GetSection(EconomyOptions.SectionName));
+        services.Configure<AxelChatOptions>(configuration.GetSection(AxelChatOptions.SectionName));
+        services.Configure<ElevenLabsOptions>(configuration.GetSection(ElevenLabsOptions.SectionName));
+        services.Configure<OverlayTtsOptions>(configuration.GetSection(OverlayTtsOptions.SectionName));
 
         services.AddHttpClient<ITtsService, ElevenLabsTtsService>((serviceProvider, client) =>
         {
-            var options = serviceProvider
-                .GetRequiredService<Microsoft.Extensions.Options.IOptions<ElevenLabsOptions>>()
-                .Value;
-
+            var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<ElevenLabsOptions>>().Value;
             client.BaseAddress = new Uri(options.BaseUrl);
             client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+        });
+
+        services.AddHttpClient<ITtsOverlayClient, OverlayTtsQueueClient>((serviceProvider, client) =>
+        {
+            var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<OverlayTtsOptions>>().Value;
+            client.BaseAddress = new Uri(options.BaseUrl);
+            client.Timeout = TimeSpan.FromSeconds(5);
         });
 
         services.AddSingleton<IAxelChatClient, AxelChatWebSocketClient>();
