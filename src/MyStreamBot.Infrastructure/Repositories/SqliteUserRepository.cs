@@ -6,34 +6,16 @@ using MyStreamBot.Infrastructure.Persistence;
 
 namespace MyStreamBot.Infrastructure.Repositories;
 
-public sealed class SqliteUserRepository(
-    MyStreamBotDbContext db) : IUserRepository
+public sealed class SqliteUserRepository(MyStreamBotDbContext db) : IUserRepository
 {
-    public async Task<StreamerUser> GetOrCreateAsync(
-        Platform platform,
-        string platformUserId,
-        string username,
-        string? avatarUrl,
-        CancellationToken ct = default)
+    public async Task<StreamerUser> GetOrCreateAsync(Platform platform, string platformUserId, string username, string? avatarUrl, CancellationToken ct = default)
     {
-        var user = await db.Users
-            .SingleOrDefaultAsync(
-                x =>
-                    x.Platform == platform &&
-                    x.PlatformUserId == platformUserId,
-                ct);
-
+        var user = await db.Users.SingleOrDefaultAsync(x => x.Platform == platform && x.PlatformUserId == platformUserId, ct);
         if (user is not null)
         {
             user.Username = username;
-
-            if (!string.IsNullOrWhiteSpace(avatarUrl))
-            {
-                user.AvatarUrl = avatarUrl;
-            }
-
+            if (!string.IsNullOrWhiteSpace(avatarUrl)) user.AvatarUrl = avatarUrl;
             user.LastSeenAtUtc = DateTime.UtcNow;
-
             return user;
         }
 
@@ -49,146 +31,83 @@ public sealed class SqliteUserRepository(
             CreatedAtUtc = DateTime.UtcNow,
             LastSeenAtUtc = DateTime.UtcNow
         };
-
         db.Users.Add(user);
-
         await db.SaveChangesAsync(ct);
-
         return user;
     }
 
-    public async Task<RewardResult> TryRewardAsync(
-        StreamerUser user,
-        string? normalizedMessage,
-        string sourceEventKey,
-        long amount,
-        PointTransactionType type,
-        string? description,
-        bool enforceRepeatedMessageCheck,
-        CancellationToken ct = default)
+    public async Task<RewardResult> TryRewardAsync(StreamerUser user, string? normalizedMessage, string sourceEventKey, long amount, PointTransactionType type, string? description, bool enforceRepeatedMessageCheck, CancellationToken ct = default)
     {
-        if (amount <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(amount),
-                amount,
-                "A quantidade de pontos deve ser maior que zero.");
-        }
+        if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        if (string.IsNullOrWhiteSpace(sourceEventKey)) throw new ArgumentException("A chave da mensagem não pode ser vazia.", nameof(sourceEventKey));
 
-        if (string.IsNullOrWhiteSpace(sourceEventKey))
-        {
-            throw new ArgumentException(
-                "A chave da mensagem não pode ser vazia.",
-                nameof(sourceEventKey));
-        }
-
-        await using var transaction =
-            await db.Database.BeginTransactionAsync(ct);
-
-        // Primeira barreira: o mesmo evento do AxelChat já gerou uma
-        // PointTransaction em alguma execução anterior.
-        var alreadyProcessed =
-            await db.PointTransactions
-                .AnyAsync(
-                    x => x.SourceMessageKey == sourceEventKey,
-                    ct);
-
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var alreadyProcessed = await db.PointTransactions.AnyAsync(x => x.SourceMessageKey == sourceEventKey, ct);
         if (alreadyProcessed)
         {
-            if (enforceRepeatedMessageCheck && normalizedMessage is not null)
-            {
-                user.LastChatMessageNormalized = normalizedMessage;
-            }
-
+            if (enforceRepeatedMessageCheck && normalizedMessage is not null) user.LastChatMessageNormalized = normalizedMessage;
             user.LastSeenAtUtc = DateTime.UtcNow;
-
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-
-            return new RewardResult(
-                Rewarded: false,
-                AlreadyProcessed: true,
-                RepeatedMessage: false,
-                Balance: user.Points);
+            return new RewardResult(false, true, false, user.Points);
         }
 
-        // Segunda barreira: apenas mensagens de chat usam a regra
-        // de não pontuar a mesma mensagem consecutivamente.
-        var repeatedMessage =
-            enforceRepeatedMessageCheck &&
-            normalizedMessage is not null &&
-            string.Equals(
-                user.LastChatMessageNormalized,
-                normalizedMessage,
-                StringComparison.Ordinal);
-
-        if (enforceRepeatedMessageCheck && normalizedMessage is not null)
-        {
-            user.LastChatMessageNormalized = normalizedMessage;
-        }
-
+        var repeatedMessage = enforceRepeatedMessageCheck && normalizedMessage is not null && string.Equals(user.LastChatMessageNormalized, normalizedMessage, StringComparison.Ordinal);
+        if (enforceRepeatedMessageCheck && normalizedMessage is not null) user.LastChatMessageNormalized = normalizedMessage;
         user.LastSeenAtUtc = DateTime.UtcNow;
-
         if (repeatedMessage)
         {
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
-
-            return new RewardResult(
-                Rewarded: false,
-                AlreadyProcessed: false,
-                RepeatedMessage: true,
-                Balance: user.Points);
+            return new RewardResult(false, false, true, user.Points);
         }
 
-        checked
-        {
-            user.Points += amount;
-            user.Xp += amount;
-        }
-
-        db.PointTransactions.Add(
-            new PointTransaction
-            {
-                UserId = user.Id,
-                Amount = amount,
-                Type = type,
-                Description = description,
-                CreatedAtUtc = DateTime.UtcNow,
-                SourceMessageKey = sourceEventKey
-            });
-
+        checked { user.Points += amount; user.Xp += amount; }
+        db.PointTransactions.Add(new PointTransaction { UserId = user.Id, Amount = amount, Type = type, Description = description, CreatedAtUtc = DateTime.UtcNow, SourceMessageKey = sourceEventKey });
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
-
-        return new RewardResult(
-            Rewarded: true,
-            AlreadyProcessed: false,
-            RepeatedMessage: false,
-            Balance: user.Points);
+        return new RewardResult(true, false, false, user.Points);
     }
 
-    public async Task SaveAsync(
-        StreamerUser user,
-        CancellationToken ct = default)
+    public async Task<SpendResult> TrySpendAsync(StreamerUser user, string sourceEventKey, long amount, PointTransactionType type, string? description, CancellationToken ct = default)
     {
-        await db.SaveChangesAsync(ct);
-    }
+        if (amount <= 0) throw new ArgumentOutOfRangeException(nameof(amount));
+        if (string.IsNullOrWhiteSpace(sourceEventKey)) throw new ArgumentException("A chave da mensagem não pode ser vazia.", nameof(sourceEventKey));
 
-    public async Task<IReadOnlyList<StreamerUser>> GetTopAsync(
-        int count,
-        CancellationToken ct = default)
-    {
-        if (count <= 0)
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var alreadyProcessed = await db.PointTransactions.AnyAsync(x => x.SourceMessageKey == sourceEventKey, ct);
+        if (alreadyProcessed)
         {
-            return [];
+            await transaction.CommitAsync(ct);
+            return new SpendResult(false, true, false, user.Points);
         }
 
-        return await db.Users
-            .OrderByDescending(x => x.Points)
-            .ThenBy(x => x.Username)
-            .Take(count)
-            .AsNoTracking()
-            .ToListAsync(ct);
+        if (user.Points < amount)
+        {
+            await transaction.CommitAsync(ct);
+            return new SpendResult(false, false, true, user.Points);
+        }
+
+        checked { user.Points -= amount; }
+        db.PointTransactions.Add(new PointTransaction
+        {
+            UserId = user.Id,
+            Amount = -amount,
+            Type = type,
+            Description = description,
+            CreatedAtUtc = DateTime.UtcNow,
+            SourceMessageKey = sourceEventKey
+        });
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+        return new SpendResult(true, false, false, user.Points);
+    }
+
+    public async Task SaveAsync(StreamerUser user, CancellationToken ct = default) => await db.SaveChangesAsync(ct);
+
+    public async Task<IReadOnlyList<StreamerUser>> GetTopAsync(int count, CancellationToken ct = default)
+    {
+        if (count <= 0) return [];
+        return await db.Users.OrderByDescending(x => x.Points).ThenBy(x => x.Username).Take(count).AsNoTracking().ToListAsync(ct);
     }
 }
