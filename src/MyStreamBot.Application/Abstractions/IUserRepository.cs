@@ -22,6 +22,14 @@ public interface IUserRepository
         bool enforceRepeatedMessageCheck,
         CancellationToken ct = default);
 
+    Task<SpendResult> TrySpendAsync(
+        StreamerUser user,
+        string sourceEventKey,
+        long amount,
+        PointTransactionType type,
+        string? description,
+        CancellationToken ct = default);
+
     Task SaveAsync(
         StreamerUser user,
         CancellationToken ct = default);
@@ -35,4 +43,10 @@ public sealed record RewardResult(
     bool Rewarded,
     bool AlreadyProcessed,
     bool RepeatedMessage,
+    long Balance);
+
+public sealed record SpendResult(
+    bool Spent,
+    bool AlreadyProcessed,
+    bool InsufficientBalance,
     long Balance);
