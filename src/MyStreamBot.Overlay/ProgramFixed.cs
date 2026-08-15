@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MyStreamBot.Infrastructure.Persistence;
+using MyStreamBot.Overlay;
 
 var builder = WebApplication.CreateBuilder(args);
 var dbPath = ResolveDatabasePath();
@@ -12,6 +13,8 @@ var topGate = new SemaphoreSlim(1, 1);
 CachedValue<IReadOnlyList<RecentItemDto>>? recentCache = null;
 CachedValue<IReadOnlyList<TopUserDto>>? topCache = null;
 var cacheLifetime = TimeSpan.FromSeconds(1);
+
+TtsOverlayEndpoints.MapTtsOverlay(app);
 
 app.MapGet("/", () => Results.Content(RecentHtml(), "text/html; charset=utf-8"));
 app.MapGet("/recent", () => Results.Content(RecentHtml(), "text/html; charset=utf-8"));

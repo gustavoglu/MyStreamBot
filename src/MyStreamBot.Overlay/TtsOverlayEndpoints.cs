@@ -44,7 +44,9 @@ public static class TtsOverlayEndpoints
             return File.Exists(path) ? Results.File(path, "audio/mpeg", enableRangeProcessing: true) : Results.NotFound();
         });
 
-        app.MapGet("/tts", () => Results.Content(TtsHtml(), "text/html; charset=utf-8"));
+        app.MapGet("/tts", () => 
+        Results.Content(TtsHtml(), "text/html; charset=utf-8")
+        );
     }
 
     private static string GetAudioDirectory()
@@ -62,5 +64,6 @@ let lastId=0,processing=false,queue=[],seen=new Set();const card=document.getEle
 </script></body></html>
 """;
 
-public sealed record TtsOverlayPublishRequest(string Username, string Text, string AudioFileName);
-public sealed record TtsOverlayEvent(long Id, string Username, string Text, string AudioFileName, DateTime CreatedAtUtc);
+    public sealed record TtsOverlayPublishRequest(string Username, string Text, string AudioFileName);
+    public sealed record TtsOverlayEvent(long Id, string Username, string Text, string AudioFileName, DateTime CreatedAtUtc);
+}
