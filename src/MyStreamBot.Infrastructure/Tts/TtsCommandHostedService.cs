@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MyStreamBot.Application.Abstractions;
 using MyStreamBot.Application.Integrations.AxelChat;
 
@@ -15,9 +16,13 @@ namespace MyStreamBot.Infrastructure.Tts;
 public sealed class TtsCommandHostedService(
     IAxelChatClient axelChatClient,
     ITtsService ttsService,
+    IOptions<ElevenLabsOptions> options,
     ILogger<TtsCommandHostedService> logger) : BackgroundService
 {
-    private const string Command = "!testevoz";
+    private const string TestCommand = "!testevoz";
+    private const string VoiceCommand = "!voz";
+
+    private readonly ElevenLabsOptions _options = options.Value;
 
     private readonly Channel<VoiceRequest> _queue =
         Channel.CreateUnbounded<VoiceRequest>(new UnboundedChannelOptions
@@ -34,8 +39,9 @@ public sealed class TtsCommandHostedService(
         axelChatClient.EventReceived += OnAxelChatEventAsync;
 
         logger.LogInformation(
-            "TTS Command Service iniciado. Comando disponível: {Command}",
-            Command);
+            "TTS Command Service iniciado. Comandos disponíveis: {TestCommand} e {VoiceCommand}",
+            TestCommand,
+            VoiceCommand);
 
         try
         {
@@ -72,7 +78,7 @@ public sealed class TtsCommandHostedService(
             if (message.Deleted || string.IsNullOrWhiteSpace(message.Text))
                 continue;
 
-            if (!TryExtractCommandText(message.Text, out var text))
+            if (!TryExtractCommandText(message.Text, out var text, out var command))
                 continue;
 
             // O AxelChat pode reenviar a mesma mensagem em eventos diferentes.
@@ -87,7 +93,8 @@ public sealed class TtsCommandHostedService(
                 new VoiceRequest(
                     message.MessageId,
                     message.Username,
-                    text));
+                    text,
+                    command));
         }
 
         return Task.CompletedTask;
@@ -99,14 +106,18 @@ public sealed class TtsCommandHostedService(
     {
         try
         {
+            var voiceId = SelectVoiceId();
+
             logger.LogInformation(
-                "[TTS] {Username} solicitou teste de voz: {Text}",
+                "[TTS] {Username} solicitou {Command}: {Text} | VoiceId={VoiceId}",
                 request.Username,
-                request.Text);
+                request.Command,
+                request.Text,
+                voiceId);
 
             var result = await ttsService.GenerateAsync(
                 request.Text,
-                null,
+                voiceId,
                 cancellationToken);
 
             var directory = Path.Combine(
@@ -127,10 +138,11 @@ public sealed class TtsCommandHostedService(
                 cancellationToken);
 
             logger.LogInformation(
-                "[TTS] Áudio gerado com sucesso para {Username}. Arquivo={FilePath} | Caracteres={Characters} | RequestId={RequestId}",
+                "[TTS] Áudio gerado com sucesso para {Username}. Arquivo={FilePath} | Caracteres={Characters} | VoiceId={VoiceId} | RequestId={RequestId}",
                 request.Username,
                 filePath,
                 result.CharacterCount,
+                voiceId,
                 result.RequestId ?? "n/a");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -146,27 +158,57 @@ public sealed class TtsCommandHostedService(
         }
     }
 
+    private string SelectVoiceId()
+    {
+        var voices = _options.VoiceIds
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (voices.Length > 0)
+            return voices[Random.Shared.Next(voices.Length)];
+
+        if (!string.IsNullOrWhiteSpace(_options.DefaultVoiceId))
+            return _options.DefaultVoiceId.Trim();
+
+        throw new InvalidOperationException(
+            "Nenhuma voz configurada em ElevenLabs:VoiceIds e ElevenLabs:DefaultVoiceId também está vazio.");
+    }
+
     private static bool TryExtractCommandText(
         string message,
-        out string text)
+        out string text,
+        out string command)
     {
         text = string.Empty;
+        command = string.Empty;
 
         var trimmed = message.Trim();
 
-        if (!trimmed.StartsWith(Command, StringComparison.OrdinalIgnoreCase))
-            return false;
+        foreach (var candidate in new[] { TestCommand, VoiceCommand })
+        {
+            if (!trimmed.StartsWith(candidate, StringComparison.OrdinalIgnoreCase))
+                continue;
 
-        if (trimmed.Length == Command.Length)
-            return false;
+            if (trimmed.Length == candidate.Length)
+                return false;
 
-        var separator = trimmed[Command.Length];
+            var separator = trimmed[candidate.Length];
 
-        if (!char.IsWhiteSpace(separator))
-            return false;
+            if (!char.IsWhiteSpace(separator))
+                continue;
 
-        text = trimmed[Command.Length..].Trim();
-        return !string.IsNullOrWhiteSpace(text);
+            text = trimmed[candidate.Length..].Trim();
+
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            command = candidate;
+            return true;
+        }
+
+        return false;
     }
 
     private static string SanitizeFileName(string value)
@@ -183,5 +225,6 @@ public sealed class TtsCommandHostedService(
     private sealed record VoiceRequest(
         string MessageId,
         string Username,
-        string Text);
+        string Text,
+        string Command);
 }
