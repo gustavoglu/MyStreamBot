@@ -11,6 +11,7 @@ public enum PointTransactionType
     BetWin,
     Transfer,
     Purchase,
+    Tts,
     Admin,
     Bonus,
     Penalty,
