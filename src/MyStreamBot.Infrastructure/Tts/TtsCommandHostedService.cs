@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -8,6 +9,7 @@ using MyStreamBot.Application.Abstractions;
 using MyStreamBot.Application.Integrations.AxelChat;
 using MyStreamBot.Application.Services;
 using MyStreamBot.Core.Enums;
+using MyStreamBot.Infrastructure.Persistence;
 
 namespace MyStreamBot.Infrastructure.Tts;
 
@@ -16,6 +18,7 @@ public sealed class TtsCommandHostedService(
     ITtsService ttsService,
     ITtsOverlayClient overlayClient,
     IServiceScopeFactory scopeFactory,
+    IDbContextFactory<MyStreamBotDbContext> dbFactory,
     IOptions<ElevenLabsOptions> options,
     ILogger<TtsCommandHostedService> logger) : BackgroundService
 {
@@ -51,25 +54,14 @@ public sealed class TtsCommandHostedService(
     {
         if (cancellationToken.IsCancellationRequested) return Task.CompletedTask;
         if (!string.Equals(@event.Type, "NEW_MESSAGES_RECEIVED", StringComparison.OrdinalIgnoreCase) && !string.Equals(@event.Type, "MESSAGES_CHANGED", StringComparison.OrdinalIgnoreCase)) return Task.CompletedTask;
-
-        logger.LogDebug("[TTS] AXELCHAT_EVENT Type={Type} Messages={Count}", @event.Type, @event.Messages.Count);
         foreach (var message in @event.Messages)
         {
             if (message.Deleted || string.IsNullOrWhiteSpace(message.Text)) continue;
             if (!TryExtractCommandText(message.Text, out var text, out var command)) continue;
-            if (!string.IsNullOrWhiteSpace(message.MessageId) && !_processedMessageIds.TryAdd(message.MessageId, 0))
-            {
-                logger.LogDebug("[TTS] DUPLICATE_IGNORED MessageId={MessageId}", message.MessageId);
-                continue;
-            }
-
+            if (!string.IsNullOrWhiteSpace(message.MessageId) && !_processedMessageIds.TryAdd(message.MessageId, 0)) continue;
             var request = new VoiceRequest(message.MessageId, message.UserId, message.Username, message.AvatarUrl, message.Platform, text, command);
-            if (!_queue.Writer.TryWrite(request))
-            {
-                logger.LogError("[TTS] QUEUE_WRITE_FAILED MessageId={MessageId} User={Username}", message.MessageId, message.Username);
-                continue;
-            }
-            logger.LogInformation("[TTS] COMMAND_RECEIVED MessageId={MessageId} User={Username} Command={Command} Text={Text} Platform={Platform}", message.MessageId, message.Username, command, text, message.Platform);
+            if (!_queue.Writer.TryWrite(request)) logger.LogError("[TTS] QUEUE_WRITE_FAILED MessageId={MessageId} User={Username}", message.MessageId, message.Username);
+            else logger.LogInformation("[TTS] COMMAND_RECEIVED MessageId={MessageId} User={Username} Command={Command} Text={Text} Platform={Platform}", message.MessageId, message.Username, command, text, message.Platform);
         }
         return Task.CompletedTask;
     }
@@ -82,37 +74,42 @@ public sealed class TtsCommandHostedService(
             var isTestUser = string.Equals(request.Username, TestUsername, StringComparison.OrdinalIgnoreCase);
             var isPaidCommand = string.Equals(request.Command, VoiceCommand, StringComparison.OrdinalIgnoreCase);
             var isTestCommand = string.Equals(request.Command, TestCommand, StringComparison.OrdinalIgnoreCase);
+            if (!isPaidCommand && !isTestCommand) return;
 
-            if (!isPaidCommand && !isTestCommand)
+            await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
             {
-                logger.LogWarning("[TTS] UNKNOWN_COMMAND Command={Command} User={Username}", request.Command, request.Username);
-                return;
+                var settings = await GetSettingsAsync(db, cancellationToken);
+                if (isPaidCommand && !settings.AcceptCommands)
+                {
+                    logger.LogInformation("[TTS] REJECTED_DISABLED User={Username} Reason=COMMANDS_PAUSED", request.Username);
+                    return;
+                }
+
+                if (!isTestUser && isPaidCommand && await db.TtsBlockedViewers.AnyAsync(x => x.Platform == request.Platform.ToString() && x.PlatformUserId == request.PlatformUserId, cancellationToken))
+                {
+                    logger.LogInformation("[TTS] REJECTED_BLOCKED User={Username} PlatformUserId={PlatformUserId}", request.Username, request.PlatformUserId);
+                    return;
+                }
             }
 
-            // O AxelChat é um usuário de teste local: !voz não exige pontos para permitir testes do pipeline completo.
             if (isPaidCommand && !isTestUser)
             {
                 await using var balanceScope = scopeFactory.CreateAsyncScope();
                 var economy = balanceScope.ServiceProvider.GetRequiredService<EconomyService>();
                 var balance = await economy.GetBalanceAsync(request.Platform, request.PlatformUserId, request.Username, cancellationToken);
-                logger.LogInformation("[TTS] BALANCE_CHECK User={Username} Balance={Balance} Cost={Cost}", request.Username, balance, VoiceCost);
                 if (balance < VoiceCost)
                 {
                     logger.LogInformation("[TTS] REJECTED_INSUFFICIENT_BALANCE User={Username} Balance={Balance} Cost={Cost} ElevenLabsNotCalled=True", request.Username, balance, VoiceCost);
                     return;
                 }
-                logger.LogInformation("[TTS] BALANCE_OK User={Username} Balance={Balance} Cost={Cost}", request.Username, balance, VoiceCost);
             }
-            else if (isPaidCommand)
-            {
-                logger.LogInformation("[TTS] TEST_USER_BYPASS User={Username} Cost={Cost} PointsRequired=False", request.Username, VoiceCost);
-            }
+
+            // Pause do overlay mantém o pedido na fila, mas não gera áudio nem gasta pontos.
+            await WaitForPublishEnabledAsync(isPaidCommand, cancellationToken);
 
             var voiceId = SelectVoiceId();
             logger.LogInformation("[TTS] GENERATING_AUDIO User={Username} Command={Command} VoiceId={VoiceId} Text={Text}", request.Username, request.Command, voiceId, request.Text);
             var result = await ttsService.GenerateAsync(request.Text, voiceId, cancellationToken);
-            logger.LogInformation("[TTS] AUDIO_GENERATED User={Username} Bytes={Bytes} Characters={Characters} RequestId={RequestId}", request.Username, result.Audio.Length, result.CharacterCount, result.RequestId ?? "n/a");
-
             var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyStreamBot", "tts-test");
             Directory.CreateDirectory(directory);
             var safeUsername = SanitizeFileName(request.Username);
@@ -120,7 +117,6 @@ public sealed class TtsCommandHostedService(
             var fileName = $"{timestamp}_{safeUsername}.{result.FileExtension}";
             filePath = Path.Combine(directory, fileName);
             await File.WriteAllBytesAsync(filePath, result.Audio, cancellationToken);
-            logger.LogInformation("[TTS] AUDIO_SAVED File={FilePath} Exists={Exists} Bytes={Bytes}", filePath, File.Exists(filePath), result.Audio.Length);
 
             if (isPaidCommand && !isTestUser)
             {
@@ -129,18 +125,12 @@ public sealed class TtsCommandHostedService(
                 var spend = await economy.TrySpendAsync(request.Platform, request.PlatformUserId, request.Username, request.AvatarUrl, $"tts:{request.MessageId}", VoiceCost, PointTransactionType.Tts, $"Leitura por voz: {request.Text}", cancellationToken);
                 if (!spend.Spent)
                 {
-                    logger.LogWarning("[TTS] SPEND_FAILED User={Username} InsufficientBalance={InsufficientBalance} Balance={Balance} ElevenLabsWasAlreadyCalled=True", request.Username, spend.InsufficientBalance, spend.Balance);
+                    logger.LogWarning("[TTS] SPEND_FAILED User={Username} Balance={Balance}", request.Username, spend.Balance);
                     TryDelete(filePath);
                     return;
                 }
-                logger.LogInformation("[TTS] POINTS_CHARGED User={Username} Cost={Cost} Balance={Balance}", request.Username, VoiceCost, spend.Balance);
-            }
-            else if (isPaidCommand)
-            {
-                logger.LogInformation("[TTS] POINTS_NOT_CHARGED User={Username} Reason=TEST_USER_BYPASS", request.Username);
             }
 
-            logger.LogInformation("[TTS] PUBLISHING_OVERLAY User={Username} File={FileName}", request.Username, fileName);
             await overlayClient.PublishAsync(request.Username, request.AvatarUrl, request.Text, fileName, cancellationToken);
             logger.LogInformation("[TTS] OVERLAY_PUBLISHED User={Username} File={FileName} MessageId={MessageId} Command={Command}", request.Username, fileName, request.MessageId, request.Command);
         }
@@ -150,6 +140,29 @@ public sealed class TtsCommandHostedService(
             TryDelete(filePath);
             logger.LogError(ex, "[TTS] PIPELINE_ERROR User={Username} MessageId={MessageId} Command={Command}", request.Username, request.MessageId, request.Command);
         }
+    }
+
+    private async Task WaitForPublishEnabledAsync(bool paidCommand, CancellationToken ct)
+    {
+        if (!paidCommand) return;
+        while (!ct.IsCancellationRequested)
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(ct);
+            var settings = await GetSettingsAsync(db, ct);
+            if (settings.PublishEnabled) return;
+            logger.LogDebug("[TTS] OVERLAY_PAUSED waiting for publish to resume");
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+        }
+    }
+
+    private static async Task<TtsAdminSettings> GetSettingsAsync(MyStreamBotDbContext db, CancellationToken ct)
+    {
+        var settings = await db.TtsAdminSettings.FirstOrDefaultAsync(x => x.Id == 1, ct);
+        if (settings is not null) return settings;
+        settings = new TtsAdminSettings { Id = 1, AcceptCommands = true, PublishEnabled = true, UpdatedAtUtc = DateTime.UtcNow };
+        db.TtsAdminSettings.Add(settings);
+        await db.SaveChangesAsync(ct);
+        return settings;
     }
 
     private string SelectVoiceId()
