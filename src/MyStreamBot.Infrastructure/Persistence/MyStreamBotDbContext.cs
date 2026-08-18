@@ -9,6 +9,8 @@ public sealed class MyStreamBotDbContext(DbContextOptions<MyStreamBotDbContext> 
     public DbSet<PointTransaction> PointTransactions => Set<PointTransaction>();
     public DbSet<TtsOverlayEvent> TtsOverlayEvents => Set<TtsOverlayEvent>();
     public DbSet<TtsOverlayClient> TtsOverlayClients => Set<TtsOverlayClient>();
+    public DbSet<TtsAdminSettings> TtsAdminSettings => Set<TtsAdminSettings>();
+    public DbSet<TtsBlockedViewer> TtsBlockedViewers => Set<TtsBlockedViewer>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -44,6 +46,15 @@ public sealed class MyStreamBotDbContext(DbContextOptions<MyStreamBotDbContext> 
             e.HasKey(x => x.Id);
             e.HasIndex(x => x.ClientName).IsUnique();
             e.Property(x => x.ClientName).HasMaxLength(200).IsRequired();
+        });
+        modelBuilder.Entity<TtsAdminSettings>(e => e.HasKey(x => x.Id));
+        modelBuilder.Entity<TtsBlockedViewer>(e =>
+        {
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.Platform, x.PlatformUserId }).IsUnique();
+            e.Property(x => x.Username).HasMaxLength(100).IsRequired();
+            e.Property(x => x.Platform).HasMaxLength(50).IsRequired();
+            e.Property(x => x.PlatformUserId).HasMaxLength(200).IsRequired();
         });
     }
 }
