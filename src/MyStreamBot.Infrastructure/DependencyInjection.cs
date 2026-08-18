@@ -19,7 +19,7 @@ public static class DependencyInjection
         string connectionString,
         IConfiguration configuration)
     {
-        services.AddDbContext<MyStreamBotDbContext>(o => o.UseSqlite(connectionString));
+        services.AddDbContextFactory<MyStreamBotDbContext>(o => o.UseSqlite(connectionString));
         services.AddScoped<IUserRepository, SqliteUserRepository>();
         services.AddScoped<EconomyService>();
         services.AddSingleton<ChatHistoryLogger>();
