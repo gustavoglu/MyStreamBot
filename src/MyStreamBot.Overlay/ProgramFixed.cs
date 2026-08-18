@@ -14,6 +14,7 @@ CachedValue<IReadOnlyList<RecentItemDto>>? recentCache = null;
 CachedValue<IReadOnlyList<TopUserDto>>? topCache = null;
 var cacheLifetime = TimeSpan.FromSeconds(1);
 
+TtsAdminEndpoints.MapTtsAdmin(app);
 TtsOverlayEndpoints.MapTtsOverlay(app);
 
 app.MapGet("/", () => Results.Content(RecentHtml(), "text/html; charset=utf-8"));
