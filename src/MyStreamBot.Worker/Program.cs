@@ -85,6 +85,15 @@ static async Task EnsureDatabaseSchemaAsync(
         "SourceMessageKey",
         "TEXT NULL");
 
+    // TTS events were already present in older databases. EnsureCreatedAsync()
+    // does not alter an existing table when new entity properties are added,
+    // so IsCanceled must be migrated explicitly.
+    await EnsureColumnAsync(
+        connection,
+        "TtsOverlayEvents",
+        "IsCanceled",
+        "INTEGER NOT NULL DEFAULT 0");
+
     await using (var command = connection.CreateCommand())
     {
         command.CommandText =
