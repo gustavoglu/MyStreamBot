@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using MyStreamBot.Application.Abstractions;
 using MyStreamBot.Application.Integrations.AxelChat;
 using MyStreamBot.Application.Services;
+using MyStreamBot.Core.Entities;
 using MyStreamBot.Core.Enums;
 using MyStreamBot.Infrastructure.Persistence;
 
@@ -32,6 +33,7 @@ public sealed class TtsCommandHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await EnsureAdminSchemaAsync(stoppingToken);
         axelChatClient.EventReceived += OnAxelChatEventAsync;
         logger.LogInformation("[TTS] SERVICE_STARTED. {TestCommand} é gratuito; {VoiceCommand} custa {Cost} pontos; usuário de teste {TestUsername} está liberado.", TestCommand, VoiceCommand, VoiceCost, TestUsername);
         try
@@ -84,7 +86,6 @@ public sealed class TtsCommandHostedService(
                     logger.LogInformation("[TTS] REJECTED_DISABLED User={Username} Reason=COMMANDS_PAUSED", request.Username);
                     return;
                 }
-
                 if (!isTestUser && isPaidCommand && await db.TtsBlockedViewers.AnyAsync(x => x.Platform == request.Platform.ToString() && x.PlatformUserId == request.PlatformUserId, cancellationToken))
                 {
                     logger.LogInformation("[TTS] REJECTED_BLOCKED User={Username} PlatformUserId={PlatformUserId}", request.Username, request.PlatformUserId);
@@ -104,9 +105,7 @@ public sealed class TtsCommandHostedService(
                 }
             }
 
-            // Pause do overlay mantém o pedido na fila, mas não gera áudio nem gasta pontos.
             await WaitForPublishEnabledAsync(isPaidCommand, cancellationToken);
-
             var voiceId = SelectVoiceId();
             logger.LogInformation("[TTS] GENERATING_AUDIO User={Username} Command={Command} VoiceId={VoiceId} Text={Text}", request.Username, request.Command, voiceId, request.Text);
             var result = await ttsService.GenerateAsync(request.Text, voiceId, cancellationToken);
@@ -165,6 +164,12 @@ public sealed class TtsCommandHostedService(
         return settings;
     }
 
+    private async Task EnsureAdminSchemaAsync(CancellationToken ct)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        await db.Database.ExecuteSqlRawAsync("CREATE TABLE IF NOT EXISTS TtsAdminSettings (Id INTEGER NOT NULL CONSTRAINT PK_TtsAdminSettings PRIMARY KEY, AcceptCommands INTEGER NOT NULL DEFAULT 1, PublishEnabled INTEGER NOT NULL DEFAULT 1, UpdatedAtUtc TEXT NOT NULL); CREATE TABLE IF NOT EXISTS TtsBlockedViewers (Id INTEGER NOT NULL CONSTRAINT PK_TtsBlockedViewers PRIMARY KEY AUTOINCREMENT, Platform TEXT NOT NULL, PlatformUserId TEXT NOT NULL, Username TEXT NOT NULL, CreatedAtUtc TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS IX_TtsBlockedViewers_Platform_User ON TtsBlockedViewers (Platform, PlatformUserId); INSERT OR IGNORE INTO TtsAdminSettings (Id, AcceptCommands, PublishEnabled, UpdatedAtUtc) VALUES (1,1,1,CURRENT_TIMESTAMP);", ct);
+    }
+
     private string SelectVoiceId()
     {
         var voices = _options.VoiceIds.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim()).Distinct(StringComparer.Ordinal).ToArray();
@@ -180,24 +185,15 @@ public sealed class TtsCommandHostedService(
         {
             if (!trimmed.StartsWith(candidate, StringComparison.OrdinalIgnoreCase)) continue;
             if (trimmed.Length == candidate.Length || !char.IsWhiteSpace(trimmed[candidate.Length])) continue;
-            text = trimmed[candidate.Length..].Trim();
-            if (string.IsNullOrWhiteSpace(text)) return false;
-            command = candidate; return true;
+            text = trimmed[candidate.Length..].Trim(); if (string.IsNullOrWhiteSpace(text)) return false; command = candidate; return true;
         }
         return false;
     }
 
     private static string SanitizeFileName(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
-        return string.IsNullOrWhiteSpace(sanitized) ? "viewer" : sanitized;
+        var invalid = Path.GetInvalidFileNameChars(); var sanitized = new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray()); return string.IsNullOrWhiteSpace(sanitized) ? "viewer" : sanitized;
     }
-
-    private static void TryDelete(string? path)
-    {
-        try { if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) File.Delete(path); } catch { }
-    }
-
-    private sealed record VoiceRequest(string MessageId, string PlatformUserId, string Username, string? AvatarUrl, Platform Platform, string Text, string Command);
+    private static void TryDelete(string? path){try{if(!string.IsNullOrWhiteSpace(path)&&File.Exists(path))File.Delete(path);}catch{}}
+    private sealed record VoiceRequest(string MessageId,string PlatformUserId,string Username,string? AvatarUrl,Platform Platform,string Text,string Command);
 }
